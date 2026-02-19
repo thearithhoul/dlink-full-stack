@@ -9,7 +9,6 @@ from sqlmodel import Field, SQLModel
 
 class Links(SQLModel, table=True):
     __tablename__ = "links"
-
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True, index=True)
     code: str = Field(index=True, unique=True)
     web_url: str
