@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from ..model.auth_model import User
 
 
@@ -19,8 +19,26 @@ class GoogleCallBackResponse(BaseModel):
     access_token: str
     token_type :str ="bearer"
     expires_in : int
+    refresh_token: str
+    refresh_expires_in: int
     user: User
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class RefreshTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    refresh_token: str
+    refresh_expires_in: int
     
+
+class UpdateDomainRequest(BaseModel):
+    domain: str = Field(..., min_length=1, max_length=255)
+
 
 class GoogleTokenInfo(BaseModel):
     # tell Pydantic don't fail if input JSON has fields not defined in the model 

@@ -11,6 +11,7 @@ class Links(SQLModel, table=True):
     __tablename__ = "links"
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True, index=True)
     code: str = Field(index=True, unique=True)
+   
     web_url: str
     android_url: Optional[str] = None
     ios_url: Optional[str] = None

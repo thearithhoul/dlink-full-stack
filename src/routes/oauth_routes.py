@@ -3,16 +3,23 @@ from fastapi.responses import RedirectResponse
 from urllib.parse import urlencode
 
 from ..core.config import settings
-from ..schema.auth_schema import GoogleCallBackResponse, GoogleCallbackRequest
+from ..model.auth_model import User
+from ..schema.auth_schema import (
+    GoogleCallBackResponse,
+    GoogleCallbackRequest,
+    RefreshTokenRequest,
+    RefreshTokenResponse,
+    UpdateDomainRequest,
+)
 from ..services import oauth_service
-from ..shared.dependencies import SessionDep
+from ..shared.dependencies import CurrentUser, SessionDep
 
 
 route = routing.APIRouter(prefix=f"/api/v{settings.api_version}/auth", tags=["auth"])
 
 
 def _build_google_auth_url() -> str:
-    redirect_uri = f"{settings.OAUTH_REDIRECT}/api/v{settings.api_version}/auth/google/callback"
+    redirect_uri = f"{settings.OAUTH_REDIRECT}/auth/callback"
     params = {
         "client_id": settings.OAUTH_CLIENT_ID,
         "redirect_uri": redirect_uri,
@@ -29,9 +36,19 @@ async def _handle_google_callback(session: SessionDep, callback_code: str) -> Go
     return await service.google_callback(callback_code)
 
 
+def _refresh_google_tokens(session: SessionDep, refresh_token: str) -> RefreshTokenResponse:
+    service = oauth_service.OauthService(session=session)
+    return service.refresh_tokens(refresh_token)
+
+
+def _google_auth_redirect() -> RedirectResponse:
+    return RedirectResponse(_build_google_auth_url())
+
+
+
 @route.get("/google/authorize", include_in_schema=False)
 def google_authorize() -> RedirectResponse:
-    return RedirectResponse(_build_google_auth_url())
+    return _google_auth_redirect()
 
 
 @route.get("/google/authorize-url", operation_id="google_authorize_url")
@@ -67,3 +84,37 @@ async def google_callback_post(
         raise HTTPException(
             status_code=500, detail=f"Error processing Google callback: {str(e)}"
         ) from e
+
+
+@route.post("/google/refresh", operation_id="google_refresh")
+async def google_refresh_token(
+    session: SessionDep,
+    body: RefreshTokenRequest = Body(...),
+) -> RefreshTokenResponse:
+    try:
+        return _refresh_google_tokens(session=session, refresh_token=body.refresh_token)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error refreshing token: {str(e)}"
+        ) from e
+
+
+@route.get("/me", operation_id="auth_me")
+@route.get("/userinfo", include_in_schema=False)
+def auth_me(current_user: CurrentUser) -> User:
+    return current_user
+
+
+@route.patch("/me/domain", operation_id="auth_update_domain")
+def auth_update_domain(
+    session: SessionDep,
+    current_user: CurrentUser,
+    body: UpdateDomainRequest = Body(...),
+) -> User:
+    service = oauth_service.OauthService(session=session)
+    normalized_domain = body.domain.strip().lower()
+    if not normalized_domain:
+        raise HTTPException(status_code=422, detail="Domain must not be empty.")
+    return service.update_user(current_user, domain=normalized_domain)

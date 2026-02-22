@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     OAUTH_SECRET :str
     OAUTH_REDIRECT : str
     JWT_SECRET : str
+    JWT_ACCESS_EXPIRE_SECONDS: int = 3600
+    JWT_REFRESH_EXPIRE_SECONDS: int = 60 * 60 * 24 * 30
     
     model_config = SettingsConfigDict(
         env_file=".env",

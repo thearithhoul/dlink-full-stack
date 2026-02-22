@@ -76,6 +76,13 @@ def get_current_user(
         )
 
     payload = _verify_hs256_jwt(credentials.credentials, settings.JWT_SECRET)
+    token_type = payload.get("token_type", "access")
+    if token_type != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token",
+        )
+
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(

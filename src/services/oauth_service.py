@@ -11,7 +11,11 @@ from sqlmodel import Session, select
 from sqlalchemy.exc import IntegrityError
 from ..core.config import settings
 
-from ..schema.auth_schema import GoogleCallBackResponse, GoogleTokenInfo
+from ..schema.auth_schema import (
+    GoogleCallBackResponse,
+    GoogleTokenInfo,
+    RefreshTokenResponse,
+)
 
 from ..model.auth_model import User
 import httpx
@@ -20,6 +24,12 @@ class OauthService:
     def __init__(self , session:Session):
         self.session = session
         self.Jwt_secret = settings.JWT_SECRET
+        self.access_token_expires_in = max(
+            1, int(getattr(settings, "JWT_ACCESS_EXPIRE_SECONDS", 3600))
+        )
+        self.refresh_token_expires_in = max(
+            1, int(getattr(settings, "JWT_REFRESH_EXPIRE_SECONDS", 60 * 60 * 24 * 30))
+        )
 
     def get_user_by_id(self, user_id: str) -> User | None:
         return self.session.get(User, user_id)
@@ -76,6 +86,7 @@ class OauthService:
             "given_name",
             "family_name",
             "avatar_url",
+            "domain",
             "is_active",
             "is_email_verified",
         }
@@ -132,6 +143,7 @@ class OauthService:
         user_id: str,
         email: str,
         expires_in_seconds: int = 3600,
+        token_type: str = "access",
         secret_key: str | None = None,
     ) -> str:
         key = secret_key or getattr(settings, "JWT_SECRET", None) or settings.OAUTH_SECRET
@@ -142,6 +154,7 @@ class OauthService:
         payload = {
             "sub": user_id,
             "email": email,
+            "token_type": token_type,
             "iat": now,
             "exp": now + expires_in_seconds,
         }
@@ -157,6 +170,90 @@ class OauthService:
         encoded_signature = _b64url(signature)
 
         return f"{encoded_header}.{encoded_payload}.{encoded_signature}"
+
+    @staticmethod
+    def _b64url_decode(value: str) -> bytes:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode(value + padding)
+
+    def verify_local_jwt(
+        self,
+        token: str,
+        *,
+        secret_key: str | None = None,
+    ) -> dict[str, Any]:
+        key = secret_key or self.Jwt_secret
+        if not key:
+            raise HTTPException(status_code=500, detail="JWT secret is not configured")
+
+        try:
+            encoded_header, encoded_payload, encoded_signature = token.split(".")
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail="Invalid token format") from exc
+
+        signing_input = f"{encoded_header}.{encoded_payload}".encode("utf-8")
+        expected_sig = hmac.new(
+            key.encode("utf-8"), signing_input, hashlib.sha256
+        ).digest()
+
+        try:
+            provided_sig = self._b64url_decode(encoded_signature)
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail="Invalid token signature") from exc
+
+        if not hmac.compare_digest(expected_sig, provided_sig):
+            raise HTTPException(status_code=401, detail="Invalid token signature")
+
+        try:
+            payload = json.loads(self._b64url_decode(encoded_payload))
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail="Invalid token payload") from exc
+
+        exp = payload.get("exp")
+        now = int(datetime.now(timezone.utc).timestamp())
+        if not isinstance(exp, int) or exp < now:
+            raise HTTPException(status_code=401, detail="Token expired")
+
+        return payload
+
+    def refresh_tokens(self, refresh_token: str) -> RefreshTokenResponse:
+        payload = self.verify_local_jwt(refresh_token, secret_key=self.Jwt_secret)
+
+        if payload.get("token_type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        user_id = payload.get("sub")
+        email = payload.get("email")
+        if not user_id or not email:
+            raise HTTPException(status_code=401, detail="Invalid refresh token payload")
+
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="User is inactive")
+
+        access_token = self.create_jwt_token(
+            user_id=user.id,
+            email=user.email,
+            expires_in_seconds=self.access_token_expires_in,
+            token_type="access",
+            secret_key=self.Jwt_secret,
+        )
+        new_refresh_token = self.create_jwt_token(
+            user_id=user.id,
+            email=user.email,
+            expires_in_seconds=self.refresh_token_expires_in,
+            token_type="refresh",
+            secret_key=self.Jwt_secret,
+        )
+
+        return RefreshTokenResponse(
+            access_token=access_token,
+            expires_in=self.access_token_expires_in,
+            refresh_token=new_refresh_token,
+            refresh_expires_in=self.refresh_token_expires_in,
+        )
         
     async def google_callback(self, code: str) -> GoogleCallBackResponse:
         """Handle Google OAuth callback"""
@@ -168,7 +265,7 @@ class OauthService:
         "code": code,
         "client_id": settings.OAUTH_CLIENT_ID,
         "client_secret": settings.OAUTH_SECRET,
-        "redirect_uri": f"{settings.OAUTH_REDIRECT}/api/v{settings.api_version}/auth/google/callback",
+        "redirect_uri": f"{settings.OAUTH_REDIRECT}/auth/callback",
         "grant_type": "authorization_code",
         }
         
@@ -185,18 +282,27 @@ class OauthService:
             raise HTTPException(status_code=401, detail="Missing id_token")
         
         token_info = await self._verify_google_token(id_token)
-        user =  self.upsert_google_user(token_info)
-        expires_in = 3600
+        user = self.upsert_google_user(token_info)
         access_token = self.create_jwt_token(
             user_id=user.id,
             email=user.email,
-            expires_in_seconds=expires_in,
-            secret_key= self.Jwt_secret
+            expires_in_seconds=self.access_token_expires_in,
+            token_type="access",
+            secret_key=self.Jwt_secret
+        )
+        refresh_token = self.create_jwt_token(
+            user_id=user.id,
+            email=user.email,
+            expires_in_seconds=self.refresh_token_expires_in,
+            token_type="refresh",
+            secret_key=self.Jwt_secret,
         )
         
         return GoogleCallBackResponse(
             access_token=access_token,
-            expires_in=expires_in,
+            expires_in=self.access_token_expires_in,
+            refresh_token=refresh_token,
+            refresh_expires_in=self.refresh_token_expires_in,
             user=user,
         )
         

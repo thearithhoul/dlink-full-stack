@@ -3,7 +3,7 @@ import logging
 from logging.config import dictConfig
 
 import sentry_sdk
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -13,7 +13,7 @@ from sqlmodel import select
 from .model.link_model import Links
 from .routes.link_routes import route as link_route
 from .routes.oauth_routes import route as oauth_route
-from .shared.dependencies import SessionDep
+from .shared.dependencies import CurrentUser, SessionDep
 
 from .core.config import settings
 
@@ -67,14 +67,10 @@ LOGGING_CONFIG= {
 
 app = FastAPI(lifespan=None, title="Dynamic Link App", description="A FastAPI application for managing dynamic links.")
 
-# Dev CORS: allow localhost/127.0.0.1 from any port (e.g. 3000/5173).
+# Dev CORS: allow localhost + dlink.ink (apex and subdomains) from any port.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost",
-        "http://127.0.0.1",
-    ],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^https?://(([\w-]+\.)*localhost|127\.0\.0\.1|dlink\.ink|([\w-]+\.)+dlink\.ink)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,11 +84,11 @@ app.include_router(oauth_route)
 
 
 @app.get("/")
-def redirectlink(code: str, session: SessionDep) -> RedirectResponse:
+def redirectlink(code: str,
+                session: SessionDep) -> RedirectResponse:
     if not code:
         logger.warning("Redirect failed: code is required")
         raise HTTPException(status_code=400, detail="code is required")
-    
     link = session.exec(select(Links).where(Links.code == code, Links.is_active.is_(True))).first()
     
     if link is None:
