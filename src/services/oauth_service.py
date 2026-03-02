@@ -78,23 +78,23 @@ class OauthService:
             self.session.rollback()
             raise HTTPException(status_code=409, detail="User already exists") from exc
 
-    def update_user(self, user: User, **changes: Any) -> User:
-        allowed_fields = {
-            "email",
-            "google_sub",
-            "full_name",
-            "given_name",
-            "family_name",
-            "avatar_url",
-            "domain",
-            "is_active",
-            "is_email_verified",
-        }
 
-        for key, value in changes.items():
-            if key in allowed_fields:
-                setattr(user, key, value)
+    def update_user_domain(self, user_id: str, subdomain: str) -> User:
+        normalized_domain = subdomain.strip().lower()
+        if not normalized_domain:
+            raise HTTPException(status_code=422, detail="Domain must not be empty")
 
+        user = self.session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User does not exist")
+
+        is_unique = self.session.exec(
+            select(User.id).where(User.domain == normalized_domain, User.id != user_id)
+        ).first()
+        if is_unique is not None:
+            raise HTTPException(status_code=409, detail="User update conflicts with existing data")
+
+        user.domain = normalized_domain
         user.update_at = datetime.now(timezone.utc)
 
         try:
@@ -105,6 +105,7 @@ class OauthService:
         except IntegrityError as exc:
             self.session.rollback()
             raise HTTPException(status_code=409, detail="User update conflicts with existing data") from exc
+
 
     def delete_user(self, user_id: str) -> bool:
         user = self.get_user_by_id(user_id)
@@ -136,6 +137,37 @@ class OauthService:
             return self.update_user(user, **user_payload)
 
         return self.create_user(**user_payload)
+
+    def update_user(self, user: User, **fields: Any) -> User:
+        if user is None:
+            raise HTTPException(status_code=404, detail="User does not exist")
+
+        allowed_fields = {
+            "email",
+            "google_sub",
+            "full_name",
+            "given_name",
+            "family_name",
+            "avatar_url",
+            "is_active",
+            "is_email_verified",
+            "domain",
+        }
+
+        for key, value in fields.items():
+            if key in allowed_fields:
+                setattr(user, key, value)
+
+        user.update_at = datetime.now(timezone.utc)
+
+        try:
+            self.session.add(user)
+            self.session.commit()
+            self.session.refresh(user)
+            return user
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise HTTPException(status_code=409, detail="User update conflicts with existing data") from exc
 
     def create_jwt_token(
         self,

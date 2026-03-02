@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     database_url: str
     app_name: str = "Dynamic Link App"
     api_version: int = 1
+    base_domain: str ="damnaphchab.ink"
     environment: str = "development"
     sentry_dsn: str | None = None
     sentry_traces_sample_rate: float = 0.0

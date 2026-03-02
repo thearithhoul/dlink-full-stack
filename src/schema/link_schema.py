@@ -12,6 +12,9 @@ class CreateLinks(BaseModel):
     expires_at: datetime | None = None
 
 
+class LinkDelectRequets(BaseModel):
+    id: str
+
 class LinksRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 
 from ..core.config import settings
 from ..model.auth_model import User
+from ..schema import ApiResponse
 from ..schema.auth_schema import (
     GoogleCallBackResponse,
     GoogleCallbackRequest,
@@ -41,28 +42,42 @@ def _refresh_google_tokens(session: SessionDep, refresh_token: str) -> RefreshTo
     return service.refresh_tokens(refresh_token)
 
 
-def _google_auth_redirect() -> RedirectResponse:
-    return RedirectResponse(_build_google_auth_url())
+# def _google_auth_redirect() -> RedirectResponse:
+#     return RedirectResponse(_build_google_auth_url())
 
 
-
-@route.get("/google/authorize", include_in_schema=False)
-def google_authorize() -> RedirectResponse:
-    return _google_auth_redirect()
-
-
-@route.get("/google/authorize-url", operation_id="google_authorize_url")
-def google_authorize_url() -> dict[str, str]:
-    return {"authorization_url": _build_google_auth_url()}
+# @route.get("/google/authorize", include_in_schema=False)
+# def google_authorize() -> RedirectResponse:
+#     return _google_auth_redirect()
 
 
-@route.get("/google/callback", include_in_schema=False)
+@route.get(
+    "/google/authorize-url",
+    operation_id="google_authorize_url",
+    response_model=ApiResponse[dict[str, str]],
+)
+def google_authorize_url() -> ApiResponse[dict[str, str]]:
+    return ApiResponse(
+        message="Google authorization URL generated successfully.",
+        data={"authorization_url": _build_google_auth_url()},
+    )
+
+
+@route.get(
+    "/google/callback",
+    include_in_schema=False,
+    response_model=ApiResponse[GoogleCallBackResponse],
+)
 async def google_callback_get(
     session: SessionDep,
     code: str = Query(...),
-) -> GoogleCallBackResponse:
+) -> ApiResponse[GoogleCallBackResponse]:
     try:
-        return await _handle_google_callback(session=session, callback_code=code)
+        callback_response = await _handle_google_callback(session=session, callback_code=code)
+        return ApiResponse(
+            message="Google callback processed successfully.",
+            data=callback_response,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -71,13 +86,21 @@ async def google_callback_get(
         ) from e
 
 
-@route.post("/google/callback", operation_id="google_callback_post")
+@route.post(
+    "/google/callback",
+    operation_id="google_callback_post",
+    response_model=ApiResponse[GoogleCallBackResponse],
+)
 async def google_callback_post(
     session: SessionDep,
     body: GoogleCallbackRequest = Body(...),
-) -> GoogleCallBackResponse:
+) -> ApiResponse[GoogleCallBackResponse]:
     try:
-        return await _handle_google_callback(session=session, callback_code=body.code)
+        callback_response = await _handle_google_callback(session=session, callback_code=body.code)
+        return ApiResponse(
+            message="Google callback processed successfully.",
+            data=callback_response,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -86,13 +109,21 @@ async def google_callback_post(
         ) from e
 
 
-@route.post("/google/refresh", operation_id="google_refresh")
+@route.post(
+    "/google/refresh",
+    operation_id="google_refresh",
+    response_model=ApiResponse[RefreshTokenResponse],
+)
 async def google_refresh_token(
     session: SessionDep,
     body: RefreshTokenRequest = Body(...),
-) -> RefreshTokenResponse:
+) -> ApiResponse[RefreshTokenResponse]:
     try:
-        return _refresh_google_tokens(session=session, refresh_token=body.refresh_token)
+        refreshed_tokens = _refresh_google_tokens(session=session, refresh_token=body.refresh_token)
+        return ApiResponse(
+            message="Google token refreshed successfully.",
+            data=refreshed_tokens,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -100,21 +131,18 @@ async def google_refresh_token(
             status_code=500, detail=f"Error refreshing token: {str(e)}"
         ) from e
 
-
-@route.get("/me", operation_id="auth_me")
+@route.get("/me", operation_id="auth_me", response_model=ApiResponse[User])
 @route.get("/userinfo", include_in_schema=False)
-def auth_me(current_user: CurrentUser) -> User:
-    return current_user
+def auth_me(current_user: CurrentUser) -> ApiResponse[User]:
+    return ApiResponse(message="User profile fetched successfully.", data=current_user)
 
 
-@route.patch("/me/domain", operation_id="auth_update_domain")
+@route.patch("/me/domain", operation_id="auth_update_domain", response_model=ApiResponse[User])
 def auth_update_domain(
     session: SessionDep,
     current_user: CurrentUser,
     body: UpdateDomainRequest = Body(...),
-) -> User:
+) -> ApiResponse[User]:
     service = oauth_service.OauthService(session=session)
-    normalized_domain = body.domain.strip().lower()
-    if not normalized_domain:
-        raise HTTPException(status_code=422, detail="Domain must not be empty.")
-    return service.update_user(current_user, domain=normalized_domain)
+    updated_user = service.update_user_domain(current_user.id, body.domain)
+    return ApiResponse(message="User domain updated successfully.", data=updated_user)

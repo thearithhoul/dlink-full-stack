@@ -1,18 +1,11 @@
 from pydantic import BaseModel, ConfigDict, Field
 from ..model.auth_model import User
+ 
 
-
-class CallbackParams(BaseModel):
-    code: str | None = None
-    state: str | None = None
-    error: str | None = None
-    
-    
-
-    
 class GoogleCallbackRequest(BaseModel):
     """Google login with ID token request."""
     code: str
+    
     
 
 class GoogleCallBackResponse(BaseModel):
