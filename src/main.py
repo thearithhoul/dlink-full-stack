@@ -4,11 +4,10 @@ from logging.config import dictConfig
 import re
 
 import sentry_sdk
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sqlmodel import select
@@ -120,14 +119,14 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
     return JSONResponse(status_code=500, content=payload)
 
 
-@app.get("/{code}", include_in_schema=False)
-def redirectlink(code: str,
-                session: SessionDep,
-                request: Request,
-                ) -> RedirectResponse:
+@app.get(f"/api/v{settings.api_version}/dlink", include_in_schema=False, response_model=ApiResponse[dict[str, str]])
+def redirectlink(code: str = Query(..., min_length=1),
+                 subdomain: str | None= Query(None),
+                session: SessionDep= None,
+                ) -> ApiResponse[dict[str, str]]:
     
     code = (code or "").strip()
-    subdomain = get_subdomain(request=request)
+    link = None
 
     if not code:
         logger.warning("Redirect failed: code is required")
@@ -151,6 +150,13 @@ def redirectlink(code: str,
                 Links.is_active.is_(True),
             )
         ).first()
+    else:
+        link = session.exec(
+            select(Links).where(
+                Links.code == code,
+                Links.is_active.is_(True),
+            )
+        ).first()
         
     
     if link is None:
@@ -170,7 +176,13 @@ def redirectlink(code: str,
         
     logger.info("Redirecting code=%s to destination", code)
     
-    return RedirectResponse(url=link.default_url, status_code=307)
+    return ApiResponse(
+        message="Redirect Success",
+        data={
+            "redirect_link":link.default_url
+        }
+    ) 
+
 
 
 def get_subdomain(request: Request) -> str | None :
